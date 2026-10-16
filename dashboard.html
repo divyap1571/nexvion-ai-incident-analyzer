@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nexvion AI | Incident Analyzer</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1120;--panel:#131d30;--border:#293750;--text:#edf3ff;--muted:#9baac2;--blue:#6897ff;--green:#4adea3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 system-ui,Segoe UI,sans-serif}
+header{padding:24px 5%;border-bottom:1px solid var(--border);background:#10192a}
+header h1{margin:0;font-size:25px}header p{margin:5px 0;color:var(--muted)}
+main{max-width:1200px;margin:28px auto;padding:0 20px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px;min-width:0}
+h2{font-size:18px;margin:0 0 15px}
+label{display:block;margin:12px 0 5px;color:var(--muted)}
+input,select,textarea{width:100%;padding:11px;border-radius:8px;border:1px solid var(--border);background:#0b1425;color:var(--text);font:inherit}
+textarea{min-height:115px;resize:vertical}
+button{border:0;border-radius:8px;padding:10px 15px;background:var(--blue);color:#071225;font-weight:700;cursor:pointer;margin:12px 7px 0 0}
+button.secondary{background:#293750;color:var(--text)}
+button:disabled{opacity:.55;cursor:wait}
+.status{color:var(--green);font-weight:700}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:520px;overflow:auto;background:#09111f;border:1px solid var(--border);border-radius:8px;padding:14px;font:13px/1.6 ui-monospace,monospace}
+.muted{color:var(--muted);font-size:13px}
+.full{grid-column:1/-1}
+@media(max-width:760px){.grid{grid-template-columns:1fr}.full{grid-column:auto}header h1{font-size:21px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>✦ Nexvion AI Incident Analyzer</h1>
+  <p>Local AI-powered DevOps incident analysis and Prometheus monitoring</p>
+  <div id="health" class="status">Checking API status...</div>
+</header>
+<main>
+<div class="grid">
+  <section class="card">
+    <h2>Incident Analysis</h2>
+    <p class="muted">Enter incident details and submit them to the local AI model.</p>
+    <form id="incidentForm">
+      <label for="alertName">Alert / Incident Name</label>
+      <input id="alertName" maxlength="200" required value="DemoHTTP500">
+      <label for="severity">Severity</label>
+      <select id="severity">
+        <option>critical</option><option selected>high</option>
+        <option>warning</option><option>medium</option><option>low</option><option>unknown</option>
+      </select>
+      <label for="description">Description</label>
+      <textarea id="description" maxlength="3000" required>Application endpoint is returning HTTP 500 errors.</textarea>
+      <label for="logs">Incident Logs</label>
+      <textarea id="logs" maxlength="6000" required placeholder="Paste relevant logs here">ERROR GET /api/orders returned HTTP 500
+ERROR Internal Server Error</textarea>
+      <button id="analyzeBtn" type="submit">Analyze Incident with AI</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Prometheus Monitoring</h2>
+    <p class="muted">Retrieve alert rules and current alert information from the existing API.</p>
+    <button id="rulesBtn" type="button">Load Alert Rules</button>
+    <button id="alertsBtn" type="button" class="secondary">Load Alerts</button>
+    <button id="promBtn" type="button" class="secondary">Analyze Firing Alerts</button>
+    <p class="muted">AI analysis runs for Prometheus alerts only when an alert is firing.</p>
+    <div id="monitoringOutput"><pre>Click a button to load monitoring data.</pre></div>
+  </section>
+
+  <section class="card full">
+    <h2>AI Analysis Output</h2>
+    <div id="analysisMeta" class="muted">Your analysis will appear here after submission.</div>
+    <pre id="analysisOutput">Waiting for an incident to analyze...</pre>
+  </section>
+</div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+function showJSON(target, data) {
+  $(target).textContent = JSON.stringify(data, null, 2);
+}
+async function request(path, options = {}) {
+  const response = await fetch(path, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(JSON.stringify(data, null, 2));
+  return data;
+}
+async function checkHealth() {
+  try {
+    const data = await request('/health');
+    $('health').textContent = '● API Online — ' + data.service;
+  } catch (e) {
+    $('health').textContent = '● API unavailable: ' + e.message;
+  }
+}
+$('incidentForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = $('analyzeBtn');
+  button.disabled = true;
+  button.textContent = 'Analyzing...';
+  $('analysisMeta').textContent = 'Sending incident to the AI model...';
+  $('analysisOutput').textContent = 'Please wait...';
+  try {
+    const payload = {
+      alert_name: $('alertName').value.trim(),
+      severity: $('severity').value,
+      description: $('description').value,
+      logs: $('logs').value
+    };
+    const data = await request('/analyze', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    $('analysisMeta').textContent = 'Analysis returned by model: ' + (data.model || 'not specified');
+    $('analysisOutput').textContent = data.analysis || JSON.stringify(data, null, 2);
+  } catch (e) {
+    $('analysisMeta').textContent = 'Request failed';
+    $('analysisOutput').textContent = e.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Analyze Incident with AI';
+  }
+});
+async function loadMonitoring(path, label) {
+  $('monitoringOutput').innerHTML = '';
+  const pre = document.createElement('pre');
+  pre.textContent = 'Loading ' + label + '...';
+  $('monitoringOutput').appendChild(pre);
+  try {
+    const data = await request(path);
+    pre.textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    pre.textContent = label + ' request failed:\n' + e.message;
+  }
+}
+$('rulesBtn').addEventListener('click', () => loadMonitoring('/prometheus-rules', 'rules'));
+$('alertsBtn').addEventListener('click', () => loadMonitoring('/prometheus-alerts', 'alerts'));
+$('promBtn').addEventListener('click', async () => {
+  $('monitoringOutput').innerHTML = '';
+  const pre = document.createElement('pre');
+  pre.textContent = 'Checking firing alerts and requesting analysis if needed...';
+  $('monitoringOutput').appendChild(pre);
+  try {
+    const data = await request('/analyze-prometheus', {method: 'POST'});
+    pre.textContent = JSON.stringify(data, null, 2);
+    if (data.analyses && data.analyses.length) {
+      $('analysisMeta').textContent = 'Prometheus AI analysis returned';
+      $('analysisOutput').textContent = data.analyses.map(a =>
+        'Alert: ' + (a.alert_name || 'Unknown') + '\nModel: ' +
+        (a.model || 'Unknown') + '\n\n' + (a.analysis || '')
+      ).join('\n\n--------------------\n\n');
+    }
+  } catch (e) {
+    pre.textContent = 'Prometheus analysis request failed:\n' + e.message;
+  }
+});
+checkHealth();
+</script>
+</body>
+</html>
