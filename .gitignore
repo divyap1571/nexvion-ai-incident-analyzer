@@ -9,3 +9,5 @@ __pycache__/
 *.backup
 *.before-*
 *.pre-*
+
+.venv/

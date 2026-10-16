@@ -1,5 +1,7 @@
 import re
-from fastapi import FastAPI, HTTPException
+import os
+import secrets
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 import json
@@ -436,5 +438,106 @@ def analyze_prometheus():
                 for row in memory_metrics
             ],
         },
+        "analyses": analyses,
+    }
+
+
+@app.post("/alertmanager-webhook")
+def alertmanager_webhook(
+    payload: dict,
+    authorization: str | None = Header(default=None),
+):
+    """Accept authenticated Alertmanager notifications and analyze firing alerts only."""
+    expected_token = os.environ.get("ALERTMANAGER_WEBHOOK_TOKEN", "")
+
+    if not expected_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook authentication is not configured",
+        )
+
+    if not isinstance(authorization, str) or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    supplied_token = authorization.removeprefix("Bearer ")
+    if not secrets.compare_digest(supplied_token, expected_token):
+        raise HTTPException(status_code=401, detail="Invalid bearer token")
+
+    alerts = payload.get("alerts", [])
+
+    if not isinstance(alerts, list):
+        raise HTTPException(status_code=400, detail="alerts must be a list")
+
+    if len(alerts) > 10:
+        raise HTTPException(
+            status_code=413,
+            detail="Maximum 10 alerts per webhook request",
+        )
+
+    analyses = []
+    skipped = 0
+
+    for alert in alerts:
+        if not isinstance(alert, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Each alert must be an object",
+            )
+
+        status = alert.get("status", payload.get("status", ""))
+        if status != "firing":
+            skipped += 1
+            continue
+
+        labels = alert.get("labels", {})
+        annotations = alert.get("annotations", {})
+
+        if not isinstance(labels, dict) or not isinstance(annotations, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Alert labels and annotations must be objects",
+            )
+
+        alert_name = labels.get("alertname")
+        if not isinstance(alert_name, str) or not alert_name.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Firing alert is missing labels.alertname",
+            )
+
+        severity = labels.get("severity", "unknown")
+        if not isinstance(severity, str):
+            severity = "unknown"
+
+        summary = annotations.get("summary", "")
+        description = annotations.get("description", "")
+
+        if not isinstance(summary, str):
+            summary = ""
+        if not isinstance(description, str):
+            description = ""
+
+        incident = Incident(
+            alert_name=alert_name[:200],
+            severity=severity[:50],
+            description=(
+                "Alert received from Alertmanager. "
+                f"Summary: {summary[:1500]}. "
+                f"Description: {description[:1500]}."
+            ),
+            logs=(
+                "No application logs supplied. "
+                f"Alert startsAt: {str(alert.get('startsAt', 'not provided'))[:100]}. "
+                f"Alert value: {str(alert.get('value', 'not provided'))[:100]}."
+            ),
+        )
+
+        analyses.append(analyze(incident))
+
+    return {
+        "source": "Alertmanager",
+        "received_alert_count": len(alerts),
+        "analyzed_alert_count": len(analyses),
+        "skipped_non_firing_count": skipped,
         "analyses": analyses,
     }
